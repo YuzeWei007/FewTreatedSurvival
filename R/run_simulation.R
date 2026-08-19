@@ -43,6 +43,10 @@ SURVIVAL_N_CORES <- min(
 FERMAN_N0 <- 1000L
 FERMAN_N1_VALUES <- c(5L, 10L, 25L, 50L)
 FERMAN_M_VALUES <- c(1L, 4L, 10L)
+FERMAN_TAU_VALUES <- c(
+  null = 0,
+  alternative = 0.5
+)
 
 SURVIVAL_N0 <- BABA_SURVIVAL_N0
 SURVIVAL_N1_VALUES <- BABA_SURVIVAL_N1_VALUES
@@ -144,6 +148,7 @@ run_self_tests <- function() {
     "mean_discarded_treated", "n_errors"
   )
   stopifnot(all(required_cols %in% names(sim$summary)))
+  source(file.path("R", "test_toy_examples.R"))
   cat("All tests passed.\n")
 }
 
@@ -327,8 +332,8 @@ write_complete_simulation <- function(default_iter = 300L) {
     update_main_outputs = TRUE
   )
 
-  cat("Step 2/3: Ferman non-survival replication, N0=1000.\n")
-  write_ferman_replication(default_iter = actual_iter)
+  cat("Step 2/3: Ferman non-survival replication, N0=1000, null plus alternative.\n")
+  write_ferman_replication(default_iter = actual_iter, include_alternative = TRUE)
 
   cat("Step 3/3: proposed Version A/B survival methods, N0=1000.\n")
   write_formal_grid(
@@ -392,34 +397,45 @@ write_version_ab_30min_pilot <- function(default_iter = 20L) {
   cat("30-minute pilot files written under results/grid_level/ with prefix ", prefix, ".\n", sep = "")
 }
 
-write_ferman_replication <- function(default_iter = 5L) {
+write_ferman_replication <- function(default_iter = 5L, include_alternative = TRUE) {
   dir.create(detail_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(grid_dir, recursive = TRUE, showWarnings = FALSE)
   actual_iter <- ifelse(is.na(n_iter), default_iter, n_iter)
+  tau_values <- if (isTRUE(include_alternative)) FERMAN_TAU_VALUES else c(null = 0)
+  prefix <- if (isTRUE(include_alternative)) {
+    "ferman_2021_nn_no_survival_with_alternative_120_settings"
+  } else {
+    "ferman_2021_nn_no_survival_60_settings"
+  }
   cat("Running Ferman replication grid with", actual_iter, "replications per grid cell.\n")
+  cat("Ferman scenarios:", paste(names(tau_values), collapse = ", "), "\n")
   pilot <- run_ferman_replication_grid(
     n_iter = actual_iter,
     panels = c("A", "B", "C", "D", "E"),
     N1_values = FERMAN_N1_VALUES,
     M_values = FERMAN_M_VALUES,
     N0 = FERMAN_N0,
+    tau_values = tau_values,
     alpha = 0.05,
     n_perm = 1000,
     seed_base = 20260728,
     progress = TRUE,
     checkpoint_dir = grid_dir,
-    checkpoint_prefix = "ferman_2021_nn_no_survival_60_settings",
+    checkpoint_prefix = prefix,
     resume = TRUE
   )
 
   write.csv(pilot$results, file.path(detail_dir, "ferman_replication_results.csv"), row.names = FALSE)
   write.csv(pilot$summary, file.path(output_dir, "ferman_replication_summary.csv"), row.names = FALSE)
-  write.csv(pilot$summary, file.path(grid_dir, "ferman_2021_nn_no_survival_60_settings.csv"), row.names = FALSE)
+  write.csv(pilot$summary, file.path(grid_dir, paste0(prefix, ".csv")), row.names = FALSE)
 
   if (file.exists(file.path(output_dir, "old_attempts_ferman_saved_results_summary.csv"))) {
-    comparison <- compare_to_old_ferman_outputs(pilot$summary)
+    null_summary <- pilot$summary[pilot$summary$scenario == "null", , drop = FALSE]
+    comparison <- compare_to_old_ferman_outputs(null_summary)
     write.csv(comparison, file.path(output_dir, "ferman_replication_vs_old_attempts.csv"), row.names = FALSE)
-    write.csv(comparison, file.path(grid_dir, "ferman_2021_nn_no_survival_60_settings_vs_old_attempts.csv"), row.names = FALSE)
+    write.csv(comparison, file.path(grid_dir, paste0(prefix, "_null_vs_old_attempts.csv")), row.names = FALSE)
+    print(pilot$summary)
+    cat("\nNull-only comparison to old saved outputs:\n")
     print(comparison)
   } else {
     print(pilot$summary)
@@ -483,7 +499,8 @@ print_run_plan <- function() {
     length(SURVIVAL_OVERLAP_SHIFTS) *
     length(SURVIVAL_CENSOR_RATES)
   proposed_methods <- c("version_a_cem_sign", "version_b_nn_sign")
-  ferman_settings <- length(c("A", "B", "C", "D", "E")) *
+  ferman_settings <- length(FERMAN_TAU_VALUES) *
+    length(c("A", "B", "C", "D", "E")) *
     length(FERMAN_N1_VALUES) *
     length(FERMAN_M_VALUES)
 
@@ -509,8 +526,10 @@ print_run_plan <- function() {
   cat("   N1:", paste(FERMAN_N1_VALUES, collapse = ", "), "\n")
   cat("   M:", paste(FERMAN_M_VALUES, collapse = ", "), "\n")
   cat("   panels: A, B, C, D, E\n")
+  cat("   scenarios:", paste(names(FERMAN_TAU_VALUES), collapse = ", "), "\n")
+  cat("   alternative tau:", FERMAN_TAU_VALUES[["alternative"]], "\n")
   cat("   grid rows:", ferman_settings, "\n")
-  cat("   output: results/grid_level/ferman_2021_nn_no_survival_60_settings.csv\n\n")
+  cat("   output: results/grid_level/ferman_2021_nn_no_survival_with_alternative_120_settings.csv\n\n")
 
   cat("3. Proposed survival methods\n")
   cat("   Methods:", paste(proposed_methods, collapse = ", "), "\n")
@@ -787,17 +806,21 @@ write_report_tables <- function() {
 
 if (task == "help") {
   cat("Usage: Rscript R/run_simulation.R <task> [n_iter]\n")
-  cat("Tasks: plan, tests, small, formal, ferman, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_ab_30min_pilot, ferman_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
+  cat("Tasks: plan, tests, unit_tests, small, formal, ferman, ferman_null, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_ab_30min_pilot, ferman_300, ferman_null_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
 } else if (task == "plan") {
   print_run_plan()
 } else if (task == "tests") {
   run_self_tests()
+} else if (task == "unit_tests") {
+  source(file.path("R", "test_toy_examples.R"))
 } else if (task == "small") {
   write_small_simulation()
 } else if (task == "formal") {
   write_formal_grid(default_iter = 20L)
 } else if (task == "ferman") {
-  write_ferman_replication(default_iter = 5L)
+  write_ferman_replication(default_iter = 5L, include_alternative = TRUE)
+} else if (task == "ferman_null") {
+  write_ferman_replication(default_iter = 5L, include_alternative = FALSE)
 } else if (task == "survival_300") {
   write_formal_grid(
     default_iter = 300L,
@@ -829,7 +852,10 @@ if (task == "help") {
 } else if (task == "version_ab_30min_pilot") {
   write_version_ab_30min_pilot(default_iter = 20L)
 } else if (task == "ferman_300") {
-  write_ferman_replication(default_iter = 300L)
+  write_ferman_replication(default_iter = 300L, include_alternative = TRUE)
+  write_report_tables()
+} else if (task == "ferman_null_300") {
+  write_ferman_replication(default_iter = 300L, include_alternative = FALSE)
   write_report_tables()
 } else if (task == "complete_300") {
   write_complete_simulation(default_iter = 300L)
@@ -853,7 +879,7 @@ if (task == "help") {
     update_main_outputs = FALSE
   )
 } else if (task == "ferman_final") {
-  write_ferman_replication(default_iter = 300L)
+  write_ferman_replication(default_iter = 300L, include_alternative = TRUE)
 } else if (task == "report") {
   write_report_tables()
 } else if (task == "final") {
@@ -862,7 +888,7 @@ if (task == "help") {
   run_self_tests()
   write_small_simulation()
   write_formal_grid(default_iter = 20L)
-  write_ferman_replication(default_iter = 5L)
+  write_ferman_replication(default_iter = 5L, include_alternative = TRUE)
   write_report_tables()
 } else {
   stop("Unknown task: ", task)

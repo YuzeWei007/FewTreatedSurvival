@@ -10,8 +10,9 @@ The current code covers three parts:
 
 ## Main R Files
 
-- `R/few_treated_survival_methods.R`: method implementations, matching, p-value construction, diagnostics, and data-generating processes.
+- `R/few_treated_survival_methods.R`: main implementation file. It is kept as one file, but organized into clear sections for p-value construction, matching, survival methods, toy examples, simulation grids, and Ferman replication.
 - `R/run_simulation.R`: simulation tasks, grid settings, and result-writing code.
+- `R/test_toy_examples.R`: unit tests for toy examples and key function wrappers.
 - `R/test_nn_match_diagnostics.R`: quick diagnostic test for nearest-neighbor reuse calculations.
 - `R/test_cem_package_validation.R`: quick comparison between manual CEM grouping and `MatchIt::matchit(method = "cem")`.
 
@@ -23,16 +24,34 @@ Run tests:
 system("Rscript R/run_simulation.R tests")
 ```
 
+Run only the toy/unit tests:
+
+```r
+system("Rscript R/run_simulation.R unit_tests")
+```
+
 Print the full run plan:
 
 ```r
 system("Rscript R/run_simulation.R plan")
 ```
 
-Run the full Ferman, Baba-Yoshida, and Version A/B simulation:
+Run the full Ferman, Baba-Yoshida, and Version A/B simulation. The Ferman part now includes both null and alternative settings:
 
 ```r
 system("Rscript R/run_simulation.R complete_300")
+```
+
+Run only the Ferman null-plus-alternative grid:
+
+```r
+system("Rscript R/run_simulation.R ferman_300")
+```
+
+Run only the old Ferman null-only grid:
+
+```r
+system("Rscript R/run_simulation.R ferman_null_300")
 ```
 
 Run only the Version A/B 30-minute pilot:
@@ -45,6 +64,8 @@ system("Rscript R/run_simulation.R version_ab_30min_pilot")
 
 - CEM matching is implemented through `MatchIt::matchit(method = "cem")`.
 - CEM bins use `max(4, floor((N0 + N1)^(1/3)))`.
+- Ferman alternative is controlled by an additive treated-outcome effect `tau = 0.5`; null uses `tau = 0`.
+- When `N1` is very small, sign-change p-values are discrete. With four or fewer effective sign units, the 5% critical value is the maximum randomization statistic, so rejection can be exactly zero.
 - Baba-Yoshida baseline uses Gaussian p-values, so sign-change diagnostics such as `mean_sign_units` and `mean_contributions` are not applicable there.
 - Version A/B full-grid simulation is computationally expensive on a laptop. The current package includes a partial full-grid result and a smaller pilot result for trend checking.
 
