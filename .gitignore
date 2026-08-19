@@ -1,0 +1,16 @@
+# Generated output
+results/
+
+# Local/raw data
+data/
+
+# Common data files
+*.csv
+*.xlsx
+*.xls
+*.rds
+*.RData
+*.Rhistory
+
+# macOS
+.DS_Store
