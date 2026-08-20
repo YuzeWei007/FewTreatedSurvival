@@ -82,9 +82,46 @@ n_iter <- if (length(args) >= 2) as.integer(args[[2]]) else N_REPLICATIONS
 output_dir <- "results"
 detail_dir <- file.path("results", "detailed")
 grid_dir <- file.path("results", "grid_level")
+run_timestamp <- Sys.getenv("SIM_RUN_ID", unset = "")
+if (!nzchar(run_timestamp)) {
+  run_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+}
+timestamped_run_dir <- file.path(output_dir, "runs", run_timestamp)
 
 dir.create(output_dir, showWarnings = FALSE)
 dir.create(grid_dir, recursive = TRUE, showWarnings = FALSE)
+
+timestamped_result_path <- function(path) {
+  normalized <- gsub("\\\\", "/", path)
+  if (startsWith(normalized, paste0(output_dir, "/"))) {
+    relative <- sub(paste0("^", output_dir, "/"), "", normalized)
+  } else {
+    relative <- basename(normalized)
+  }
+
+  ext <- tools::file_ext(relative)
+  stem <- if (nzchar(ext)) {
+    sub(paste0("\\.", ext, "$"), "", relative)
+  } else {
+    relative
+  }
+  stamped_relative <- if (nzchar(ext)) {
+    paste0(stem, "_", run_timestamp, ".", ext)
+  } else {
+    paste0(stem, "_", run_timestamp)
+  }
+  file.path(timestamped_run_dir, stamped_relative)
+}
+
+write_output_csv <- function(x, file, ...) {
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  utils::write.csv(x, file, ...)
+
+  stamped_file <- timestamped_result_path(file)
+  dir.create(dirname(stamped_file), recursive = TRUE, showWarnings = FALSE)
+  utils::write.csv(x, stamped_file, ...)
+  invisible(stamped_file)
+}
 
 final_result_files <- c(
   "01_ferman_2021_nn_no_survival.csv",
@@ -166,13 +203,13 @@ write_small_simulation <- function() {
     seed_base = 20260726
   )
 
-  write.csv(sim$results, file.path(detail_dir, "small_simulation_results.csv"), row.names = FALSE)
-  write.csv(sim$summary, file.path(output_dir, "smoke_simulation_summary.csv"), row.names = FALSE)
+  write_output_csv(sim$results, file.path(detail_dir, "small_simulation_results.csv"), row.names = FALSE)
+  write_output_csv(sim$summary, file.path(output_dir, "smoke_simulation_summary.csv"), row.names = FALSE)
   print(sim$summary)
 }
 
 write_method_grid_files <- function(summary, prefix) {
-  write.csv(
+  write_output_csv(
     summary,
     file.path(grid_dir, paste0(prefix, "_grid_summary_all_methods.csv")),
     row.names = FALSE
@@ -181,7 +218,7 @@ write_method_grid_files <- function(summary, prefix) {
   for (method_name in sort(unique(summary$method))) {
     method_rows <- summary[summary$method == method_name, ]
     safe_method_name <- gsub("[^A-Za-z0-9]+", "_", method_name)
-    write.csv(
+    write_output_csv(
       method_rows,
       file.path(grid_dir, paste0(prefix, "_", safe_method_name, "_grid_summary.csv")),
       row.names = FALSE
@@ -203,7 +240,7 @@ write_method_grid_files <- function(summary, prefix) {
   method_summary <- method_summary[
     order(method_summary$scenario, method_summary$alternative_strength, method_summary$method),
   ]
-  write.csv(
+  write_output_csv(
     method_summary,
     file.path(grid_dir, paste0(prefix, "_method_comparison_summary.csv")),
     row.names = FALSE
@@ -219,7 +256,7 @@ write_method_grid_files <- function(summary, prefix) {
   n1_summary <- n1_summary[
     order(n1_summary$scenario, n1_summary$alternative_strength, n1_summary$method, n1_summary$n1),
   ]
-  write.csv(
+  write_output_csv(
     n1_summary,
     file.path(grid_dir, paste0(prefix, "_by_n1_summary.csv")),
     row.names = FALSE
@@ -240,11 +277,43 @@ write_method_grid_files <- function(summary, prefix) {
       strength_n1_summary$n1
     ),
   ]
-  write.csv(
+  write_output_csv(
     strength_n1_summary,
     file.path(grid_dir, paste0(prefix, "_by_strength_n1_summary.csv")),
     row.names = FALSE
   )
+}
+
+dedupe_ferman_summary <- function(summary) {
+  key_cols <- c("scenario", "alternative_strength", "tau", "panel", "N1", "M")
+  if (!all(key_cols %in% names(summary))) {
+    return(summary)
+  }
+  summary <- summary[order(
+    summary$scenario,
+    summary$alternative_strength,
+    summary$tau,
+    summary$panel,
+    summary$N1,
+    summary$M
+  ), ]
+  summary[!duplicated(summary[key_cols]), , drop = FALSE]
+}
+
+write_ferman_table2_null_rows <- function(summary, prefix, alpha_value) {
+  null_rows <- summary[summary$scenario == "null", , drop = FALSE]
+  null_rows <- null_rows[order(null_rows$panel, null_rows$N1, null_rows$M), ]
+  null_rows$paper_table_reference <- "Ferman 2021 Table 2"
+  null_rows$comparison_note <- paste0(
+    "Table-2-aligned run: alpha=", alpha_value,
+    "; compare null rejection_rate by panel, N1, and M."
+  )
+  write_output_csv(
+    null_rows,
+    file.path(grid_dir, paste0(prefix, "_table2_null_rows.csv")),
+    row.names = FALSE
+  )
+  invisible(null_rows)
 }
 
 write_formal_grid <- function(default_iter = 20L,
@@ -306,11 +375,11 @@ write_formal_grid <- function(default_iter = 20L,
   )
 
   if (update_main_outputs) {
-    write.csv(grid$results, file.path(detail_dir, "formal_simulation_grid_results.csv"), row.names = FALSE)
-    write.csv(grid$summary, file.path(output_dir, "formal_simulation_grid_summary.csv"), row.names = FALSE)
+    write_output_csv(grid$results, file.path(detail_dir, "formal_simulation_grid_results.csv"), row.names = FALSE)
+    write_output_csv(grid$summary, file.path(output_dir, "formal_simulation_grid_summary.csv"), row.names = FALSE)
   }
-  write.csv(grid$results, file.path(detail_dir, paste0(prefix, "_raw_results.csv")), row.names = FALSE)
-  write.csv(grid$summary, file.path(grid_dir, paste0(prefix, "_grid_summary_all_methods.csv")), row.names = FALSE)
+  write_output_csv(grid$results, file.path(detail_dir, paste0(prefix, "_raw_results.csv")), row.names = FALSE)
+  write_output_csv(grid$summary, file.path(grid_dir, paste0(prefix, "_grid_summary_all_methods.csv")), row.names = FALSE)
   write_method_grid_files(grid$summary, prefix)
   print(grid$summary)
   if (update_main_outputs) {
@@ -390,25 +459,31 @@ write_version_ab_30min_pilot <- function(default_iter = 20L) {
     n_cores = SURVIVAL_N_CORES
   )
 
-  write.csv(grid$results, file.path(detail_dir, paste0(prefix, "_raw_results.csv")), row.names = FALSE)
-  write.csv(grid$summary, file.path(grid_dir, paste0(prefix, "_grid_summary_all_methods.csv")), row.names = FALSE)
+  write_output_csv(grid$results, file.path(detail_dir, paste0(prefix, "_raw_results.csv")), row.names = FALSE)
+  write_output_csv(grid$summary, file.path(grid_dir, paste0(prefix, "_grid_summary_all_methods.csv")), row.names = FALSE)
   write_method_grid_files(grid$summary, prefix)
   print(grid$summary)
   cat("30-minute pilot files written under results/grid_level/ with prefix ", prefix, ".\n", sep = "")
 }
 
-write_ferman_replication <- function(default_iter = 5L, include_alternative = TRUE) {
+write_ferman_replication <- function(default_iter = 5L,
+                                     include_alternative = TRUE,
+                                     alpha_value = 0.05,
+                                     prefix_suffix = NULL,
+                                     write_table2_null = FALSE) {
   dir.create(detail_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(grid_dir, recursive = TRUE, showWarnings = FALSE)
   actual_iter <- ifelse(is.na(n_iter), default_iter, n_iter)
   tau_values <- if (isTRUE(include_alternative)) FERMAN_TAU_VALUES else c(null = 0)
-  prefix <- if (isTRUE(include_alternative)) {
+  base_prefix <- if (isTRUE(include_alternative)) {
     "ferman_2021_nn_no_survival_with_alternative_120_settings"
   } else {
     "ferman_2021_nn_no_survival_60_settings"
   }
+  prefix <- if (is.null(prefix_suffix)) base_prefix else paste0(base_prefix, "_", prefix_suffix)
   cat("Running Ferman replication grid with", actual_iter, "replications per grid cell.\n")
   cat("Ferman scenarios:", paste(names(tau_values), collapse = ", "), "\n")
+  cat("Ferman alpha:", alpha_value, "\n")
   pilot <- run_ferman_replication_grid(
     n_iter = actual_iter,
     panels = c("A", "B", "C", "D", "E"),
@@ -416,7 +491,7 @@ write_ferman_replication <- function(default_iter = 5L, include_alternative = TR
     M_values = FERMAN_M_VALUES,
     N0 = FERMAN_N0,
     tau_values = tau_values,
-    alpha = 0.05,
+    alpha = alpha_value,
     n_perm = 1000,
     seed_base = 20260728,
     progress = TRUE,
@@ -424,16 +499,21 @@ write_ferman_replication <- function(default_iter = 5L, include_alternative = TR
     checkpoint_prefix = prefix,
     resume = TRUE
   )
+  pilot$summary <- dedupe_ferman_summary(pilot$summary)
 
-  write.csv(pilot$results, file.path(detail_dir, "ferman_replication_results.csv"), row.names = FALSE)
-  write.csv(pilot$summary, file.path(output_dir, "ferman_replication_summary.csv"), row.names = FALSE)
-  write.csv(pilot$summary, file.path(grid_dir, paste0(prefix, ".csv")), row.names = FALSE)
+  write_output_csv(pilot$results, file.path(detail_dir, "ferman_replication_results.csv"), row.names = FALSE)
+  write_output_csv(pilot$summary, file.path(output_dir, "ferman_replication_summary.csv"), row.names = FALSE)
+  write_output_csv(pilot$summary, file.path(grid_dir, paste0(prefix, ".csv")), row.names = FALSE)
+  write_output_csv(pilot$summary, file.path(grid_dir, paste0(prefix, "_grid_summary.csv")), row.names = FALSE)
+  if (isTRUE(write_table2_null)) {
+    write_ferman_table2_null_rows(pilot$summary, prefix, alpha_value)
+  }
 
   if (file.exists(file.path(output_dir, "old_attempts_ferman_saved_results_summary.csv"))) {
     null_summary <- pilot$summary[pilot$summary$scenario == "null", , drop = FALSE]
     comparison <- compare_to_old_ferman_outputs(null_summary)
-    write.csv(comparison, file.path(output_dir, "ferman_replication_vs_old_attempts.csv"), row.names = FALSE)
-    write.csv(comparison, file.path(grid_dir, paste0(prefix, "_null_vs_old_attempts.csv")), row.names = FALSE)
+    write_output_csv(comparison, file.path(output_dir, "ferman_replication_vs_old_attempts.csv"), row.names = FALSE)
+    write_output_csv(comparison, file.path(grid_dir, paste0(prefix, "_null_vs_old_attempts.csv")), row.names = FALSE)
     print(pilot$summary)
     cat("\nNull-only comparison to old saved outputs:\n")
     print(comparison)
@@ -564,19 +644,19 @@ write_final_result_files <- function() {
   ))
 
   if (!is.null(ferman_detail)) {
-    write.csv(
+    write_output_csv(
       ferman_detail,
       file.path(output_dir, "01_ferman_2021_nn_no_survival.csv"),
       row.names = FALSE
     )
   } else if (!is.null(ferman_summary)) {
-    write.csv(
+    write_output_csv(
       ferman_summary,
       file.path(output_dir, "01_ferman_2021_nn_no_survival.csv"),
       row.names = FALSE
     )
   } else if (!is.null(ferman_panel)) {
-    write.csv(
+    write_output_csv(
       ferman_panel,
       file.path(output_dir, "01_ferman_2021_nn_no_survival.csv"),
       row.names = FALSE
@@ -584,7 +664,7 @@ write_final_result_files <- function() {
   }
 
   if (!is.null(baba_grid)) {
-    write.csv(
+    write_output_csv(
       baba_grid,
       file.path(output_dir, "02_baba_yoshida_2024_cem_survival.csv"),
       row.names = FALSE
@@ -592,7 +672,7 @@ write_final_result_files <- function() {
   } else if (!is.null(method_summary)) {
     rows <- method_summary[method_summary$method == "baba_yoshida_cem_gaussian", ]
     if (nrow(rows) > 0) {
-      write.csv(
+      write_output_csv(
         rows,
         file.path(output_dir, "02_baba_yoshida_2024_cem_survival.csv"),
         row.names = FALSE
@@ -601,7 +681,7 @@ write_final_result_files <- function() {
   }
 
   if (!is.null(version_a_grid)) {
-    write.csv(
+    write_output_csv(
       version_a_grid,
       file.path(output_dir, "03_version_a_cem_survival_ferman_pvalue.csv"),
       row.names = FALSE
@@ -609,7 +689,7 @@ write_final_result_files <- function() {
   }
 
   if (!is.null(version_b_grid)) {
-    write.csv(
+    write_output_csv(
       version_b_grid,
       file.path(output_dir, "04_version_b_nn_survival_ferman_pvalue.csv"),
       row.names = FALSE
@@ -658,7 +738,7 @@ write_report_tables <- function() {
     formal_method_summary <- formal_method_summary[
       order(formal_method_summary$scenario, formal_method_summary$alternative_strength, formal_method_summary$method),
     ]
-    write.csv(
+    write_output_csv(
       formal_method_summary,
       file.path(output_dir, "method_comparison_summary.csv"),
       row.names = FALSE
@@ -679,7 +759,7 @@ write_report_tables <- function() {
         formal_censor_summary$method
       ),
     ]
-    write.csv(
+    write_output_csv(
       formal_censor_summary,
       file.path(output_dir, "censoring_sensitivity_summary.csv"),
       row.names = FALSE
@@ -698,7 +778,7 @@ write_report_tables <- function() {
     )
     names(ferman_panel_summary)[names(ferman_panel_summary) == "abs_rejection_rate_diff"] <- "mean_abs_diff_vs_old_attempt"
     ferman_panel_summary <- ferman_panel_summary[order(ferman_panel_summary$panel), ]
-    write.csv(
+    write_output_csv(
       ferman_panel_summary,
       file.path(output_dir, "ferman_panel_comparison_summary.csv"),
       row.names = FALSE
@@ -711,7 +791,7 @@ write_report_tables <- function() {
       na.rm = TRUE
     )
     ferman_panel_summary <- ferman_panel_summary[order(ferman_panel_summary$panel), ]
-    write.csv(
+    write_output_csv(
       ferman_panel_summary,
       file.path(output_dir, "ferman_panel_comparison_summary.csv"),
       row.names = FALSE
@@ -806,7 +886,7 @@ write_report_tables <- function() {
 
 if (task == "help") {
   cat("Usage: Rscript R/run_simulation.R <task> [n_iter]\n")
-  cat("Tasks: plan, tests, unit_tests, small, formal, ferman, ferman_null, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_ab_30min_pilot, ferman_300, ferman_null_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
+  cat("Tasks: plan, tests, unit_tests, small, formal, ferman, ferman_null, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_ab_30min_pilot, ferman_300, ferman_table2_300, ferman_null_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
 } else if (task == "plan") {
   print_run_plan()
 } else if (task == "tests") {
@@ -854,6 +934,14 @@ if (task == "help") {
 } else if (task == "ferman_300") {
   write_ferman_replication(default_iter = 300L, include_alternative = TRUE)
   write_report_tables()
+} else if (task == "ferman_table2_300") {
+  write_ferman_replication(
+    default_iter = 300L,
+    include_alternative = TRUE,
+    alpha_value = 0.10,
+    prefix_suffix = "table2_alpha10",
+    write_table2_null = TRUE
+  )
 } else if (task == "ferman_null_300") {
   write_ferman_replication(default_iter = 300L, include_alternative = FALSE)
   write_report_tables()

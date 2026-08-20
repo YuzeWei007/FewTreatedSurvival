@@ -8,7 +8,12 @@
 # 5. simulation grids
 # 6. Ferman replication
 
-# Source section: R/pvalue_signchange.R
+# ============================================================
+# MODULE 1: P-value construction master
+#
+# This block contains the Ferman-style sign-change/randomization
+# p-value machinery used by the scalar Ferman replication and by
+# proposed survival Version A/B.
 # ============================================================
 
 safe_ratio <- function(num, den) {
@@ -185,8 +190,10 @@ connected_components_from_matches <- function(matched_controls) {
 
 
 # ============================================================
-
-# Source section: R/matching.R
+# MODULE 2: Matching and matching-diagnostics master
+#
+# This block contains nearest-neighbor matching, CEM matching,
+# package/manual CEM wrappers, and reuse/sign-unit diagnostics.
 # ============================================================
 
 covariate_matrix <- function(data, covariates, scaling = TRUE) {
@@ -513,8 +520,10 @@ ferman_scalar_nn_test <- function(data, covariates, outcome_col = "Y",
 
 
 # ============================================================
-
-# Source section: R/survival_contributions.R
+# MODULE 3: Survival contribution master
+#
+# This block turns matched survival data into treated-level
+# contributions for Baba-Yoshida CEM, Version A, and Version B.
 # ============================================================
 
 event_times_until <- function(time, status, tau = Inf) {
@@ -743,8 +752,10 @@ nn_survival_sign_test <- function(data, covariates, time_col = "time",
 
 
 # ============================================================
-
-# Source section: R/toy_examples.R
+# MODULE 4: Toy examples master
+#
+# This block gives tiny scalar and survival datasets that are used
+# for quick checks and unit tests.
 # ============================================================
 
 toy_scalar_data <- function() {
@@ -835,8 +846,10 @@ run_all_toy_examples <- function() {
 
 
 # ============================================================
-
-# Source section: R/simulation.R
+# MODULE 5: Simulation grid master
+#
+# This block generates scalar/survival DGPs, runs one replication,
+# summarizes results, and manages checkpointed survival grids.
 # ============================================================
 
 generate_scalar_dgp <- function(n1 = 5, n0 = 200, tau = 0, seed = NULL) {
@@ -1506,8 +1519,10 @@ run_formal_simulation_grid <- function(n_iter = 20,
 
 
 # ============================================================
-
-# Source section: R/ferman_replication.R
+# MODULE 6: Ferman 2021 replication master
+#
+# This block implements the non-survival nearest-neighbor replication
+# grid, including the added null/alternative tau settings.
 # ============================================================
 
 generate_ferman_dgp <- function(N1, N0, panel = "A", tau = 0, seed = NULL) {
@@ -1821,4 +1836,3 @@ compare_to_old_ferman_outputs <- function(our_summary,
   merged$rejection_rate_diff <- merged$rejection_rate - merged$old_attempt_rejection_rate
   merged[order(merged$panel, merged$N1, merged$M), ]
 }
-

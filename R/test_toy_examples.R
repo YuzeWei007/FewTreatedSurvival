@@ -28,6 +28,17 @@ expect_finite_p <- function(p, label) {
   expect_true(p >= 0 && p <= 1, paste(label, "p-value is outside [0, 1]."))
 }
 
+expect_equal <- function(x, y, message, tolerance = 0) {
+  if (tolerance == 0) {
+    ok <- identical(x, y)
+  } else {
+    ok <- isTRUE(all.equal(x, y, tolerance = tolerance, check.attributes = FALSE))
+  }
+  if (!ok) {
+    stop(message, call. = FALSE)
+  }
+}
+
 quiet_value <- function(expr) {
   value <- NULL
   capture.output(value <- expr)
@@ -37,41 +48,93 @@ quiet_value <- function(expr) {
 run_toy_unit_tests <- function() {
   cat("Running toy/unit tests...\n")
 
+  ## Basic helper functions
+  ratio <- safe_ratio(c(1, 2, 3), c(1, 0, 2))
+  expect_equal(ratio, c(1, 0, 1.5), "safe_ratio should return 0 when denominator is zero.")
+
+  event_times <- event_times_until(
+    time = c(3, 1, 2, 4, 2),
+    status = c(1, 1, 0, 1, 1),
+    tau = 3
+  )
+  expect_equal(event_times, c(1, 2, 3), "event_times_until returned the wrong sorted event times.")
+
   sc <- sign_change_test(c(1.5, -0.5, 0.8), alpha = 0.05)
   expect_true(is.finite(sc$statistic), "sign_change_test statistic is not finite.")
   expect_finite_p(sc$p_value, "sign_change_test")
+  expect_true(sc$n_sign_units == 3, "sign_change_test reported the wrong number of sign units.")
 
   resolution_4 <- sign_change_resolution(4)
   resolution_5 <- sign_change_resolution(5)
   expect_true(resolution_4$critical_value_is_maximum, "Expected 4 sign units to have maximum critical value at alpha=0.05.")
   expect_true(resolution_5$smallest_positive_p_value == 1 / 32, "Unexpected p-value resolution for 5 sign units.")
 
+  ## Matching helpers and diagnostics
   scalar_data <- toy_scalar_data()
+  cov_matrix <- covariate_matrix(scalar_data, covariates = "X", scaling = FALSE)
+  expect_true(nrow(cov_matrix) == nrow(scalar_data), "covariate_matrix row count changed.")
+  expect_true(ncol(cov_matrix) == 1, "covariate_matrix should return one column for one covariate.")
+
   scalar_matches <- nn_match(scalar_data, covariates = "X", M = 1, scaling = FALSE)
+  expect_true(all(c("treated_id", "control_id", "distance") %in% names(scalar_matches)), "nn_match output columns changed.")
+  expect_true(nrow(scalar_matches) == 3, "NN toy example should return one control per treated.")
+
   scalar_diag <- nn_match_diagnostics(scalar_matches, n_total_treated = 3)
   expect_true(scalar_diag$n_matched_treated == 3, "NN toy example did not match all treated units.")
+  expect_true(scalar_diag$n_discarded_treated == 0, "NN toy example should not discard treated units.")
   expect_true(scalar_diag$n_sign_units == 3, "NN toy example sign-unit diagnostic changed.")
+  expect_true(scalar_diag$n_reused_controls >= 0, "NN reuse diagnostic should be nonnegative.")
 
   ferman_toy <- quiet_value(run_ferman_toy())
   expect_true(length(ferman_toy$contributions) == 3, "Ferman toy contribution count changed.")
   expect_finite_p(ferman_toy$p_value, "Ferman toy")
 
+  ## CEM helpers and survival helpers
   survival_data <- toy_survival_data()
+  cells <- cem_cells(survival_data, covariates = "cell_x", n_bins = 2)
+  expect_true(length(cells) == nrow(survival_data), "cem_cells returned the wrong length.")
+  expect_true(!any(is.na(cells)), "cem_cells should not return NA cells for the toy data.")
+
+  cutpoints <- cem_internal_cutpoints(survival_data$X, n_bins = 2)
+  expect_true(length(cutpoints) == 1, "cem_internal_cutpoints should return one cutpoint for two bins.")
+
   cem_data <- cem_keep(survival_data, covariates = "cell_x")
   cem_diag <- cem_match_diagnostics(cem_data)
+  expect_true(cem_diag$n_total_treated == 3, "CEM toy total treated count changed.")
   expect_true(cem_diag$n_matched_treated == 3, "CEM toy example did not match all treated units.")
+  expect_true(cem_diag$n_discarded_treated == 0, "CEM toy example should not discard treated units.")
+  expect_true(cem_diag$n_sign_units == 2, "CEM toy sign-unit count changed.")
 
+  weights <- cem_control_weights_at(cem_data, t = 3, treat_col = "Z", time_col = "time", cell_col = "cem_cell")
+  expect_true(length(weights) == nrow(cem_data), "cem_control_weights_at should return one weight per subject.")
+  expect_true(all(weights[cem_data$Z == 1] == 1), "cem_control_weights_at should give treated units weight one.")
+  expect_true(all(is.finite(weights)), "cem_control_weights_at returned non-finite weights.")
+  expect_true(all(weights >= 0), "cem_control_weights_at returned negative weights.")
+  expect_true(weights[cem_data$id == "c6"] == 0, "cem_control_weights_at should give unmatched controls weight zero.")
+
+  ## Method-level wrappers
   baba_toy <- quiet_value(run_cem_survival_toy())
+  expect_true(is.finite(baba_toy$statistic), "Baba-Yoshida toy statistic is not finite.")
   expect_true(abs(sum(baba_toy$contributions) - baba_toy$statistic) < 1e-10, "Baba-Yoshida CEM contributions do not sum to statistic.")
+  expect_finite_p(baba_toy$p_gaussian_two_sided, "Baba-Yoshida toy Gaussian")
 
   version_a <- quiet_value(run_version_a_toy())
   expect_true(version_a$version == "A_CEM_survival_sign_change", "Version A toy returned the wrong version label.")
   expect_finite_p(version_a$p_value, "Version A toy")
+  expect_true(version_a$diagnostics$n_matched_treated == 3, "Version A toy matching diagnostic changed.")
+  expect_true(version_a$n_contributions == version_a$diagnostics$n_matched_treated, "Version A contribution count should equal matched treated count.")
+  expect_true(length(version_a$baba_yoshida$contributions) == version_a$n_contributions, "Version A nested contribution count changed.")
+  expect_true(version_a$n_sign_units == version_a$diagnostics$n_sign_units, "Version A sign-unit diagnostic changed.")
 
   version_b <- quiet_value(run_version_b_toy())
   expect_true(version_b$version == "B_NN_survival_sign_change", "Version B toy returned the wrong version label.")
   expect_finite_p(version_b$p_value, "Version B toy")
+  expect_true(version_b$diagnostics$n_matched_treated == 3, "Version B toy matching diagnostic changed.")
+  expect_true(version_b$n_contributions == version_b$diagnostics$n_matched_treated, "Version B contribution count should equal matched treated count.")
+  expect_true(length(version_b$nn_survival$contributions) == version_b$n_contributions, "Version B nested contribution count changed.")
+  expect_true(version_b$n_sign_units == version_b$diagnostics$n_sign_units, "Version B sign-unit diagnostic changed.")
 
+  ## Ferman alternative and tiny grid checks
   ferman_alt <- run_one_ferman_replication(
     iter = 1,
     N1 = 5,
