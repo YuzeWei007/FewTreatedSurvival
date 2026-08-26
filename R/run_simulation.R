@@ -43,6 +43,7 @@ SURVIVAL_N_CORES <- min(
 FERMAN_N0 <- 1000L
 FERMAN_N1_VALUES <- c(5L, 10L, 25L, 50L)
 FERMAN_M_VALUES <- c(1L, 4L, 10L)
+FERMAN_COVARIATE_DIMS <- c(1L, 2L, 4L, 6L)
 FERMAN_TAU_VALUES <- c(
   null = 0,
   alternative = 0.5
@@ -285,7 +286,10 @@ write_method_grid_files <- function(summary, prefix) {
 }
 
 dedupe_ferman_summary <- function(summary) {
-  key_cols <- c("scenario", "alternative_strength", "tau", "panel", "N1", "M")
+  if (!("covariate_dim" %in% names(summary))) {
+    summary$covariate_dim <- 1L
+  }
+  key_cols <- c("scenario", "alternative_strength", "tau", "panel", "covariate_dim", "N1", "M")
   if (!all(key_cols %in% names(summary))) {
     return(summary)
   }
@@ -294,6 +298,7 @@ dedupe_ferman_summary <- function(summary) {
     summary$alternative_strength,
     summary$tau,
     summary$panel,
+    summary$covariate_dim,
     summary$N1,
     summary$M
   ), ]
@@ -335,6 +340,7 @@ write_formal_grid <- function(default_iter = 20L,
     choices = c(
       "baba_yoshida_cem_gaussian",
       "version_a_cem_sign",
+      "version_a_cem_cell_sign",
       "version_b_nn_sign"
     ),
     several.ok = TRUE
@@ -464,6 +470,86 @@ write_version_ab_30min_pilot <- function(default_iter = 20L) {
   write_method_grid_files(grid$summary, prefix)
   print(grid$summary)
   cat("30-minute pilot files written under results/grid_level/ with prefix ", prefix, ".\n", sep = "")
+}
+
+write_ferman_dimension_extension <- function(default_iter = 300L,
+                                             panels = c("A", "B", "C", "D", "E"),
+                                             N1_values = FERMAN_N1_VALUES,
+                                             M_values = FERMAN_M_VALUES,
+                                             covariate_dims = FERMAN_COVARIATE_DIMS,
+                                             alpha_value = 0.10,
+                                             prefix = "ferman_covariate_dimension_extension_alpha10") {
+  dir.create(detail_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(grid_dir, recursive = TRUE, showWarnings = FALSE)
+  actual_iter <- ifelse(is.na(n_iter), default_iter, n_iter)
+
+  cat("Running Ferman covariate-dimension extension.\n")
+  cat("Purpose: check whether NN matching still works as covariate dimension grows.\n")
+  cat("Replications per grid cell:", actual_iter, "\n")
+  cat("N0:", FERMAN_N0, "\n")
+  cat("N1:", paste(N1_values, collapse = ", "), "\n")
+  cat("M:", paste(M_values, collapse = ", "), "\n")
+  cat("Panels:", paste(panels, collapse = ", "), "\n")
+  cat("Covariate dimensions:", paste(covariate_dims, collapse = ", "), "\n")
+  cat("Tau settings:", paste(names(FERMAN_TAU_VALUES), FERMAN_TAU_VALUES, sep = "=", collapse = ", "), "\n")
+  cat("Alpha:", alpha_value, "\n")
+  cat("Output prefix:", prefix, "\n")
+
+  grid <- run_ferman_replication_grid(
+    n_iter = actual_iter,
+    panels = panels,
+    N1_values = N1_values,
+    M_values = M_values,
+    N0 = FERMAN_N0,
+    covariate_dims = covariate_dims,
+    tau_values = FERMAN_TAU_VALUES,
+    alpha = alpha_value,
+    n_perm = 1000,
+    seed_base = 20260824,
+    progress = TRUE,
+    checkpoint_dir = grid_dir,
+    checkpoint_prefix = prefix,
+    resume = TRUE
+  )
+  grid$summary <- dedupe_ferman_summary(grid$summary)
+
+  dim_summary <- aggregate(
+    cbind(rejection_rate, mean_p_value, mean_sign_units,
+          mean_max_control_reuse, mean_reused_controls) ~
+      scenario + alternative_strength + tau + covariate_dim,
+    data = grid$summary,
+    FUN = mean,
+    na.rm = TRUE
+  )
+  dim_summary <- dim_summary[
+    order(dim_summary$scenario, dim_summary$alternative_strength, dim_summary$covariate_dim),
+  ]
+
+  dim_n1_summary <- aggregate(
+    cbind(rejection_rate, mean_p_value, mean_sign_units,
+          mean_max_control_reuse, mean_reused_controls) ~
+      scenario + alternative_strength + tau + covariate_dim + N1 + M,
+    data = grid$summary,
+    FUN = mean,
+    na.rm = TRUE
+  )
+  dim_n1_summary <- dim_n1_summary[
+    order(
+      dim_n1_summary$scenario,
+      dim_n1_summary$alternative_strength,
+      dim_n1_summary$covariate_dim,
+      dim_n1_summary$N1,
+      dim_n1_summary$M
+    ),
+  ]
+
+  write_output_csv(grid$results, file.path(detail_dir, paste0(prefix, "_raw_results.csv")), row.names = FALSE)
+  write_output_csv(grid$summary, file.path(grid_dir, paste0(prefix, "_grid_summary.csv")), row.names = FALSE)
+  write_output_csv(dim_summary, file.path(grid_dir, paste0(prefix, "_by_dimension_summary.csv")), row.names = FALSE)
+  write_output_csv(dim_n1_summary, file.path(grid_dir, paste0(prefix, "_by_dimension_n1_m_summary.csv")), row.names = FALSE)
+
+  print(dim_summary)
+  cat("Ferman covariate-dimension files written under results/grid_level/ with prefix ", prefix, ".\n", sep = "")
 }
 
 write_ferman_replication <- function(default_iter = 5L,
@@ -886,7 +972,7 @@ write_report_tables <- function() {
 
 if (task == "help") {
   cat("Usage: Rscript R/run_simulation.R <task> [n_iter]\n")
-  cat("Tasks: plan, tests, unit_tests, small, formal, ferman, ferman_null, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_ab_30min_pilot, ferman_300, ferman_table2_300, ferman_null_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
+  cat("Tasks: plan, tests, unit_tests, small, formal, ferman, ferman_null, survival_300, survival_n0_1000_300, survival_n0_1000_300_parallel, version_a_300_parallel, version_a_cell_300_parallel, version_b_300_parallel, version_ab_30min_pilot, ferman_300, ferman_table2_300, ferman_dim_pilot, ferman_dim_300, ferman_null_300, complete_300, paper_300, survival_final, survival_n0_1000_final, ferman_final, final, report, all\n")
 } else if (task == "plan") {
   print_run_plan()
 } else if (task == "tests") {
@@ -929,6 +1015,36 @@ if (task == "help") {
     update_main_outputs = FALSE,
     n_cores = SURVIVAL_N_CORES
   )
+} else if (task == "version_a_300_parallel") {
+  write_formal_grid(
+    default_iter = 300L,
+    n0_value = PROPOSED_SURVIVAL_N0,
+    n1_values = PROPOSED_SURVIVAL_N1_VALUES,
+    methods = "version_a_cem_sign",
+    prefix = "version_a_strength_n0_1000",
+    update_main_outputs = FALSE,
+    n_cores = SURVIVAL_N_CORES
+  )
+} else if (task == "version_a_cell_300_parallel") {
+  write_formal_grid(
+    default_iter = 300L,
+    n0_value = PROPOSED_SURVIVAL_N0,
+    n1_values = PROPOSED_SURVIVAL_N1_VALUES,
+    methods = "version_a_cem_cell_sign",
+    prefix = "version_a_cell_strength_n0_1000",
+    update_main_outputs = FALSE,
+    n_cores = SURVIVAL_N_CORES
+  )
+} else if (task == "version_b_300_parallel") {
+  write_formal_grid(
+    default_iter = 300L,
+    n0_value = PROPOSED_SURVIVAL_N0,
+    n1_values = PROPOSED_SURVIVAL_N1_VALUES,
+    methods = "version_b_nn_sign",
+    prefix = "version_b_strength_n0_1000",
+    update_main_outputs = FALSE,
+    n_cores = SURVIVAL_N_CORES
+  )
 } else if (task == "version_ab_30min_pilot") {
   write_version_ab_30min_pilot(default_iter = 20L)
 } else if (task == "ferman_300") {
@@ -941,6 +1057,20 @@ if (task == "help") {
     alpha_value = 0.10,
     prefix_suffix = "table2_alpha10",
     write_table2_null = TRUE
+  )
+} else if (task == "ferman_dim_pilot") {
+  write_ferman_dimension_extension(
+    default_iter = 50L,
+    panels = "A",
+    M_values = c(1L, 4L),
+    alpha_value = 0.10,
+    prefix = "ferman_covariate_dimension_pilot_alpha10"
+  )
+} else if (task == "ferman_dim_300") {
+  write_ferman_dimension_extension(
+    default_iter = 300L,
+    alpha_value = 0.10,
+    prefix = "ferman_covariate_dimension_extension_alpha10"
   )
 } else if (task == "ferman_null_300") {
   write_ferman_replication(default_iter = 300L, include_alternative = FALSE)

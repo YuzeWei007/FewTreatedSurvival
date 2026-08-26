@@ -126,6 +126,18 @@ run_toy_unit_tests <- function() {
   expect_true(length(version_a$baba_yoshida$contributions) == version_a$n_contributions, "Version A nested contribution count changed.")
   expect_true(version_a$n_sign_units == version_a$diagnostics$n_sign_units, "Version A sign-unit diagnostic changed.")
 
+  version_a_cell <- quiet_value(cem_survival_sign_test(
+    data = toy_survival_data(),
+    covariates = "cell_x",
+    n_bins = 4,
+    group_by_cell = TRUE,
+    exact = TRUE,
+    n_perm = 100
+  ))
+  expect_true(version_a_cell$version == "A_CEM_survival_sign_change", "Version A cell-level toy returned the wrong version label.")
+  expect_finite_p(version_a_cell$p_value, "Version A cell-level toy")
+  expect_true(version_a_cell$sign_grouping == "cem_cell", "Version A cell-level grouping was not used.")
+
   version_b <- quiet_value(run_version_b_toy())
   expect_true(version_b$version == "B_NN_survival_sign_change", "Version B toy returned the wrong version label.")
   expect_finite_p(version_b$p_value, "Version B toy")
@@ -150,18 +162,47 @@ run_toy_unit_tests <- function() {
   expect_true(abs(ferman_alt$tau - 0.5) < 1e-12, "Ferman alternative tau was not recorded.")
   expect_finite_p(ferman_alt$p_value, "Ferman alternative toy")
 
+  ferman_hd_dat <- generate_ferman_dgp(
+    N1 = 3,
+    N0 = 20,
+    panel = "A",
+    tau = 0,
+    seed = 20260824,
+    covariate_dim = 4
+  )
+  expect_true(
+    all(paste0("X", 1:4) %in% names(ferman_hd_dat)),
+    "Ferman high-dimensional DGP should create X1-X4."
+  )
+  ferman_hd <- run_one_ferman_replication(
+    iter = 1,
+    N1 = 3,
+    N0 = 20,
+    M = 1,
+    panel = "A",
+    tau = 0.5,
+    scenario = "alternative",
+    alternative_strength = "test",
+    n_perm = 100,
+    covariate_dim = 4
+  )
+  expect_true(ferman_hd$covariate_dim == 4, "Ferman high-dimensional replication did not record covariate_dim.")
+  expect_finite_p(ferman_hd$p_value, "Ferman high-dimensional toy")
+
   ferman_grid <- run_ferman_replication_grid(
     n_iter = 1,
     panels = "A",
     N1_values = 5,
     N0 = 50,
     M_values = 1,
+    covariate_dims = c(1L, 2L),
     tau_values = c(null = 0, alternative = 0.5),
     progress = FALSE,
     resume = FALSE
   )
-  expect_true(nrow(ferman_grid$summary) == 2, "Ferman toy grid should have one null row and one alternative row.")
+  expect_true(nrow(ferman_grid$summary) == 4, "Ferman toy grid should have null/alternative rows for two covariate dimensions.")
   expect_true(all(c("null", "alternative") %in% ferman_grid$summary$scenario), "Ferman toy grid is missing null or alternative.")
+  expect_true(all(c(1L, 2L) %in% ferman_grid$summary$covariate_dim), "Ferman toy grid is missing covariate dimensions.")
 
   cat("Toy/unit tests passed.\n")
   invisible(TRUE)

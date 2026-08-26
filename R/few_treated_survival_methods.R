@@ -681,7 +681,10 @@ nn_survival_contributions <- function(data, matches, time_col = "time",
   event_times <- event_times_until(data[[time_col]], data[[status_col]], tau)
 
   S <- stats::setNames(rep(0, length(split_matches)), names(split_matches))
-  detail <- data.frame()
+  # Build detail rows in a list. Repeated rbind() inside the event loop
+  # creates and copies a growing data frame thousands of times.
+  detail_rows <- vector("list", length(split_matches) * length(event_times))
+  detail_id <- 0L
 
   for (tid in names(split_matches)) {
     member_ids <- c(tid, as.character(split_matches[[tid]]))
@@ -699,12 +702,23 @@ nn_survival_contributions <- function(data, matches, time_col = "time",
       increment <- q_fun(tk) * (dNi - safe_ratio(Yi * Di, Ri))
       S[tid] <- S[tid] + increment
 
-      detail <- rbind(
-        detail,
-        data.frame(treated_id = tid, time = tk, Ri = Ri, Di = Di,
-                   Yi = Yi, dNi = dNi, increment = increment)
+      detail_id <- detail_id + 1L
+      detail_rows[[detail_id]] <- data.frame(
+        treated_id = tid, time = tk, Ri = Ri, Di = Di,
+        Yi = Yi, dNi = dNi, increment = increment,
+        stringsAsFactors = FALSE
       )
     }
+  }
+
+  detail <- if (detail_id == 0L) {
+    data.frame(
+      treated_id = character(), time = numeric(), Ri = numeric(),
+      Di = numeric(), Yi = numeric(), dNi = numeric(), increment = numeric(),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    do.call(rbind, detail_rows[seq_len(detail_id)])
   }
 
   list(contributions = S, detail = detail)
@@ -920,6 +934,7 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
                                methods = c(
                                  "baba_yoshida_cem_gaussian",
                                  "version_a_cem_sign",
+                                 "version_a_cem_cell_sign",
                                  "version_b_nn_sign"
                                )) {
   methods <- match.arg(
@@ -927,6 +942,7 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
     choices = c(
       "baba_yoshida_cem_gaussian",
       "version_a_cem_sign",
+      "version_a_cem_cell_sign",
       "version_b_nn_sign"
     ),
     several.ok = TRUE
@@ -958,7 +974,8 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
         M = M,
         alpha = alpha,
         exact = TRUE,
-        n_perm = n_perm
+        n_perm = n_perm,
+        seed = seed_base + 2000000L + iter
       ),
       method = "ferman_scalar_nn"
     )
@@ -995,9 +1012,26 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
         alpha = alpha,
         group_by_cell = FALSE,
         exact = TRUE,
-        n_perm = n_perm
+        n_perm = n_perm,
+        seed = seed_base + 3000000L + iter
       ),
       method = "version_a_cem_sign"
+    )
+  }
+
+  version_a_cell <- NULL
+  if ("version_a_cem_cell_sign" %in% methods) {
+    version_a_cell <- safe_method_result(
+      cem_survival_sign_test(
+        data = survival,
+        covariates = "X",
+        n_bins = n_bins,
+        alpha = alpha,
+        group_by_cell = TRUE,
+        exact = TRUE,
+        n_perm = n_perm
+      ),
+      method = "version_a_cem_cell_sign"
     )
   }
 
@@ -1027,7 +1061,8 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
         M = M,
         alpha = alpha,
         exact = TRUE,
-        n_perm = n_perm
+        n_perm = n_perm,
+        seed = seed_base + 4000000L + iter
       ),
       method = "version_b_nn_sign"
     )
@@ -1064,6 +1099,10 @@ run_one_simulation <- function(iter = 1, n1 = 5, n0 = 200, M = 2,
 
   if ("version_a_cem_sign" %in% methods) {
     rows <- c(rows, list(collect_sim_row(iter, "version_a_cem_sign", version_a, alpha)))
+  }
+
+  if ("version_a_cem_cell_sign" %in% methods) {
+    rows <- c(rows, list(collect_sim_row(iter, "version_a_cem_cell_sign", version_a_cell, alpha)))
   }
 
   if ("version_b_nn_sign" %in% methods) {
@@ -1292,7 +1331,14 @@ survival_setting_done <- function(existing_summary, scenario, alternative_streng
     return(FALSE)
   }
 
-  all(expected_methods %in% rows$method) && all(rows$n_iter[rows$method %in% expected_methods] >= n_iter)
+  # A checkpoint directory may contain both an earlier pilot (e.g. 20 reps)
+  # and a later formal run (e.g. 300 reps) for the same setting.  The old
+  # check required every historical row to meet n_iter, which incorrectly
+  # reran completed settings after finding the pilot row.  Use the largest
+  # completed replication count for each required method instead.
+  completed_reps <- tapply(rows$n_iter, rows$method, max, na.rm = TRUE)
+  all(expected_methods %in% names(completed_reps)) &&
+    all(completed_reps[expected_methods] >= n_iter)
 }
 
 run_formal_simulation_grid <- function(n_iter = 20,
@@ -1316,6 +1362,7 @@ run_formal_simulation_grid <- function(n_iter = 20,
                                        methods = c(
                                          "baba_yoshida_cem_gaussian",
                                          "version_a_cem_sign",
+                                         "version_a_cem_cell_sign",
                                          "version_b_nn_sign"
                                        ),
                                        checkpoint_dir = NULL,
@@ -1327,6 +1374,7 @@ run_formal_simulation_grid <- function(n_iter = 20,
     choices = c(
       "baba_yoshida_cem_gaussian",
       "version_a_cem_sign",
+      "version_a_cem_cell_sign",
       "version_b_nn_sign"
     ),
     several.ok = TRUE
@@ -1525,9 +1573,14 @@ run_formal_simulation_grid <- function(n_iter = 20,
 # grid, including the added null/alternative tau settings.
 # ============================================================
 
-generate_ferman_dgp <- function(N1, N0, panel = "A", tau = 0, seed = NULL) {
+generate_ferman_dgp <- function(N1, N0, panel = "A", tau = 0, seed = NULL,
+                                covariate_dim = 1L) {
   if (!is.null(seed)) {
     set.seed(seed)
+  }
+  covariate_dim <- as.integer(covariate_dim)
+  if (!is.finite(covariate_dim) || covariate_dim < 1) {
+    stop("covariate_dim must be a positive integer.")
   }
 
   n <- N1 + N0
@@ -1545,9 +1598,9 @@ generate_ferman_dgp <- function(N1, N0, panel = "A", tau = 0, seed = NULL) {
     mu0 <- mu1 - tau_x
     eps1 <- stats::rnorm(n)
   } else {
-    X <- stats::rnorm(n)
-    Xmat <- matrix(X, ncol = 1)
-    colnames(Xmat) <- "X"
+    Xmat <- matrix(stats::rnorm(n * covariate_dim), nrow = n, ncol = covariate_dim)
+    colnames(Xmat) <- if (covariate_dim == 1L) "X" else paste0("X", seq_len(covariate_dim))
+    X <- Xmat[, 1]
     mu0 <- rep(0, n)
 
     if (panel == "A") {
@@ -1593,14 +1646,17 @@ run_one_ferman_replication <- function(iter = 1, N1 = 10, N0 = 1000,
                                        scenario = ifelse(tau == 0, "null", "alternative"),
                                        alternative_strength = ifelse(tau == 0, "null", "standard"),
                                        alpha = 0.05, n_perm = 1000,
-                                       seed_base = 7000) {
+                                       seed_base = 7000,
+                                       covariate_dim = 1L) {
   dat <- generate_ferman_dgp(
     N1 = N1,
     N0 = N0,
     panel = panel,
     tau = tau,
+    covariate_dim = covariate_dim,
     seed = seed_base +
       100000 * match(panel, c("A", "B", "C", "D", "E", "F")) +
+      1000000 * as.integer(covariate_dim) +
       1000 * N1 +
       100 * M +
       10000 * as.integer(round(abs(tau) * 100)) +
@@ -1625,6 +1681,7 @@ run_one_ferman_replication <- function(iter = 1, N1 = 10, N0 = 1000,
     alternative_strength = alternative_strength,
     tau = tau,
     panel = panel,
+    covariate_dim = as.integer(covariate_dim),
     N1 = N1,
     N0 = N0,
     M = M,
@@ -1658,8 +1715,11 @@ summarize_ferman_replication <- function(results) {
   if (!("tau" %in% names(results))) {
     results$tau <- 0
   }
+  if (!("covariate_dim" %in% names(results))) {
+    results$covariate_dim <- 1L
+  }
 
-  group_cols <- c("scenario", "alternative_strength", "tau", "panel", "N1", "M")
+  group_cols <- c("scenario", "alternative_strength", "tau", "panel", "covariate_dim", "N1", "M")
   groups <- split(results, interaction(results[, group_cols, drop = FALSE], drop = TRUE))
   summary <- do.call(rbind, lapply(groups, function(d) {
     data.frame(
@@ -1667,6 +1727,7 @@ summarize_ferman_replication <- function(results) {
       alternative_strength = d$alternative_strength[1],
       tau = d$tau[1],
       panel = d$panel[1],
+      covariate_dim = d$covariate_dim[1],
       N1 = d$N1[1],
       M = d$M[1],
       n_iter = length(unique(d$iter)),
@@ -1679,12 +1740,19 @@ summarize_ferman_replication <- function(results) {
     )
   }))
   rownames(summary) <- NULL
-  summary[order(summary$scenario, summary$alternative_strength, summary$panel, summary$N1, summary$M), ]
+  summary[order(
+    summary$scenario,
+    summary$alternative_strength,
+    summary$panel,
+    summary$covariate_dim,
+    summary$N1,
+    summary$M
+  ), ]
 }
 
 ferman_setting_done <- function(existing_summary, panel, N1, M, n_iter,
                                 scenario = "null", alternative_strength = "null",
-                                tau = 0) {
+                                tau = 0, covariate_dim = 1L) {
   if (is.null(existing_summary) || nrow(existing_summary) == 0) {
     return(FALSE)
   }
@@ -1697,12 +1765,16 @@ ferman_setting_done <- function(existing_summary, panel, N1, M, n_iter,
   if (!("tau" %in% names(existing_summary))) {
     existing_summary$tau <- 0
   }
+  if (!("covariate_dim" %in% names(existing_summary))) {
+    existing_summary$covariate_dim <- 1L
+  }
 
   rows <- existing_summary[
     existing_summary$scenario == scenario &
       existing_summary$alternative_strength == alternative_strength &
       abs(existing_summary$tau - tau) < 1e-12 &
       existing_summary$panel == panel &
+      existing_summary$covariate_dim == covariate_dim &
       existing_summary$N1 == N1 &
       existing_summary$M == M,
   ]
@@ -1714,6 +1786,7 @@ run_ferman_replication_grid <- function(n_iter = 20,
                                         N1_values = c(5, 10, 25, 50),
                                         M_values = c(1, 4, 10),
                                         N0 = 1000,
+                                        covariate_dims = 1L,
                                         tau_values = c(null = 0),
                                         tau0 = 0,
                                         alpha = 0.05,
@@ -1731,7 +1804,9 @@ run_ferman_replication_grid <- function(n_iter = 20,
   if (is.null(names(tau_values)) || any(names(tau_values) == "")) {
     names(tau_values) <- ifelse(tau_values == 0, "null", paste0("tau_", tau_values))
   }
-  total_grid <- length(tau_values) * length(panels) * length(N1_values) * length(M_values)
+  covariate_dims <- as.integer(covariate_dims)
+  total_grid <- length(tau_values) * length(covariate_dims) *
+    length(panels) * length(N1_values) * length(M_values)
   checkpoint_summary_path <- NULL
   checkpoint_raw_path <- NULL
   existing_summary <- NULL
@@ -1748,9 +1823,10 @@ run_ferman_replication_grid <- function(n_iter = 20,
     tau <- unname(tau_values[[tau_name]])
     scenario <- if (tau == 0) "null" else "alternative"
     alternative_strength <- if (tau == 0) "null" else tau_name
-    for (panel in panels) {
-      for (N1 in N1_values) {
-        for (M in M_values) {
+    for (covariate_dim in covariate_dims) {
+      for (panel in panels) {
+        for (N1 in N1_values) {
+          for (M in M_values) {
           grid_id <- grid_id + 1
           already_done <- ferman_setting_done(
             existing_summary,
@@ -1760,13 +1836,14 @@ run_ferman_replication_grid <- function(n_iter = 20,
             n_iter = n_iter,
             scenario = scenario,
             alternative_strength = alternative_strength,
-            tau = tau
+            tau = tau,
+            covariate_dim = covariate_dim
           )
         if (progress) {
           status <- if (already_done) "skip existing" else "run"
           cat(sprintf(
-            "[ferman grid %d/%d] %s: scenario=%s, tau=%.3f, panel=%s, N1=%d, M=%d, reps=%d\n",
-            grid_id, total_grid, status, scenario, tau, panel, N1, M, n_iter
+            "[ferman grid %d/%d] %s: scenario=%s, tau=%.3f, d=%d, panel=%s, N1=%d, M=%d, reps=%d\n",
+            grid_id, total_grid, status, scenario, tau, covariate_dim, panel, N1, M, n_iter
           ))
           flush.console()
         }
@@ -1787,7 +1864,8 @@ run_ferman_replication_grid <- function(n_iter = 20,
             tau0 = tau0,
             alpha = alpha,
             n_perm = n_perm,
-            seed_base = seed_base
+            seed_base = seed_base,
+            covariate_dim = covariate_dim
           )
         }
         setting_results <- do.call(rbind, setting_rows)
@@ -1802,8 +1880,9 @@ run_ferman_replication_grid <- function(n_iter = 20,
           append_csv(setting_summary, checkpoint_summary_path)
           existing_summary <- read.csv(checkpoint_summary_path, stringsAsFactors = FALSE)
         }
+        }
       }
-    }
+      }
     }
   }
 

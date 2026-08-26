@@ -62,10 +62,23 @@ Run only the old Ferman null-only grid:
 system("Rscript R/run_simulation.R ferman_null_300")
 ```
 
+Run the Ferman covariate-dimension extension. The pilot is a faster check on Panel A; the full version runs Panels A-E with dimensions 1, 2, 4, and 6:
+
+```r
+system("Rscript R/run_simulation.R ferman_dim_pilot 50")
+system("Rscript R/run_simulation.R ferman_dim_300")
+```
+
 Run only the Version A/B 30-minute pilot:
 
 ```r
 system("Rscript R/run_simulation.R version_ab_30min_pilot")
+```
+
+Run only Version A with the proposed survival grid:
+
+```r
+system("Rscript R/run_simulation.R version_a_300_parallel")
 ```
 
 ## Current Notes
@@ -74,6 +87,7 @@ system("Rscript R/run_simulation.R version_ab_30min_pilot")
 - CEM bins use `max(4, floor((N0 + N1)^(1/3)))`.
 - Ferman alternative is controlled by an additive treated-outcome effect `tau = 0.5`; null uses `tau = 0`.
 - The main Ferman run uses `alpha = 0.05`. For direct comparison with Ferman 2021 Table 2, use `ferman_table2_300`, which uses `alpha = 0.10` and writes a null-only Table 2 comparison file.
+- The Ferman covariate-dimension extension keeps the original Panel A-E outcome model tied to the first covariate and adds extra matching covariates. This checks whether nearest-neighbor matching degrades as matching dimension increases, without changing the original one-dimensional outcome surface.
 - Other Ferman tables are not forced to align unless requested separately; Table 2 is the main comparison target for the current nearest-neighbor few-treated replication.
 - When `N1` is very small, sign-change p-values are discrete. With four or fewer effective sign units, the 5% critical value is the maximum randomization statistic, so rejection can be exactly zero.
 - Baba-Yoshida baseline uses Gaussian p-values, so sign-change diagnostics such as `mean_sign_units` and `mean_contributions` are not applicable there.
